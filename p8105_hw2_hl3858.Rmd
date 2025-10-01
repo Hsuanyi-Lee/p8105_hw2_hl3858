@@ -184,7 +184,7 @@ For available data, **Professor Trash Wheel** collected **`r round(prof_total_we
 In **June 2022**, **Gwynnda** collected **`r format(gwyn_jun_2022_cigs, big.mark = ",")` cigarette butts**.
 
 # Problem 3 — Zillow ZORI in NYC (2015–2024)
-## Read & tidy, then merge with borough/neighborhood
+## Read, tidy, and merge ZORI with borough / neighborhood
 
 ```{r}
 zori_path <- "data/zori_nyc.csv"
@@ -200,6 +200,7 @@ zip_col_zori <- names(zori_raw)[
   )
 ]
 stopifnot(length(zip_col_zori) >= 1)
+
 zori_raw <- zori_raw |>
   dplyr::mutate(zip = stringr::str_pad(as.character(.data[[zip_col_zori[1]]]), width = 5, pad = "0"))
 
@@ -272,15 +273,16 @@ zori_nyc <- zori_long |>
   dplyr::inner_join(map_clean, by = "zip") |>
   dplyr::arrange(zip, month_start)
 
-p3_n_obs    <- nrow(zori_nyc)
-p3_n_zip    <- dplyr::n_distinct(zori_nyc$zip)
-p3_n_neigh  <- dplyr::n_distinct(zori_nyc$neighborhood)
+p3_n_obs   <- nrow(zori_nyc)
+p3_n_zip   <- dplyr::n_distinct(zori_nyc$zip)
+p3_n_neigh <- dplyr::n_distinct(zori_nyc$neighborhood)
 
 zips_only_in_map <- dplyr::anti_join(
   dplyr::distinct(map_clean, zip),
   dplyr::distinct(zori_long, zip),
   by = "zip"
-) |> dplyr::arrange(zip)
+) |>
+  dplyr::arrange(zip)
 
 z2020 <- zori_nyc |>
   dplyr::filter(month_start == as.Date("2020-01-01")) |>
@@ -296,4 +298,27 @@ delta <- dplyr::inner_join(z2020, z2021, by = "zip") |>
   dplyr::select(zip, borough, neighborhood, zori_2020, zori_2021, drop_2020_2021) |>
   dplyr::arrange(drop_2020_2021) |>
   dplyr::slice(1:10)
+```
+
+## Brief description
+
+The merged tidy dataset contains **`r p3_n_obs` observations**, covering **`r p3_n_zip` unique ZIP codes** and **`r p3_n_neigh` unique neighborhoods** in NYC.  
+Key variables include `zip`, `borough`, `neighborhood`, monthly index `zori`, and `month_start` (month).
+
+### ZIPs present in mapping but not in ZORI
+```{r, echo=FALSE}
+knitr::kable(
+  head(zips_only_in_map, 20),
+  col.names = "ZIP",
+  caption = "ZIPs in mapping but not in ZORI (first 20)"
+)
+```
+
+### Largest drop from Jan 2020 to Jan 2021 (top 10)
+```{r, echo=FALSE}
+knitr::kable(
+  delta,
+  digits = 1,
+  caption = "Top 10 ZIPs with largest drop in ZORI (Jan 2020 → Jan 2021)"
+)
 ```
