@@ -1,0 +1,299 @@
+---
+title: "P8105 Homework 2 — hl3858"
+author: "HsuanYi Lee (hl3858)"
+output: github_document
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+library(readr)    
+library(lubridate) 
+library(dplyr)     
+library(tidyr)     
+library(stringr)  
+library(readxl)   
+library(janitor)  
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+# Problem 0
+
+This repo is an R Project with a `data/` subfolder. We use **relative paths** to read local CSVs and render to `github_document`.
+
+```{r, echo=FALSE}
+sessionInfo()
+```
+
+# Problem 1 — FiveThirtyEight monthly data
+
+## Import raw csv (from `data/`)
+
+```{r}
+pols_raw  <- read_csv("data/pols-month.csv")
+snp_raw   <- read_csv("data/snp.csv")
+unemp_raw <- read_csv("data/unemployment.csv")
+```
+
+## 1) Clean `pols-month.csv`
+
+- split `mon` → `year`, `month`, `day`
+- set `month` to full English name (lowercase)
+- create `president` as `gop` / `dem`
+- drop `prez_gop`, `prez_dem`, `day`
+
+```{r}
+pols <- pols_raw |>
+  separate(mon, into = c("year","month","day"), sep = "-") |>
+  mutate(
+    across(c(year, month, day), as.integer),
+    month = tolower(month.name[month]),
+    president = case_when(
+      prez_gop == 1 ~ "gop",
+      prez_dem == 1 ~ "dem",
+      TRUE ~ NA_character_
+    )
+  ) |>
+  select(
+    year, month, president,
+    gov_gop, sen_gop, rep_gop,
+    gov_dem, sen_dem, rep_dem
+  ) |>
+  arrange(year, month)
+```
+
+## 2) Clean `snp.csv`
+
+- parse `date` → split year/month/day  
+- keep `year`, `month`, `close`; arrange by year, month
+
+```{r}
+snp <- snp_raw |>
+  mutate(date = as.Date(date, format = "%m/%d/%Y")) |>
+  separate(date, into = c("year","month","day"), sep = "-") |>
+  mutate(
+    across(c(year, month, day), as.integer),
+    month = tolower(month.name[month])
+  ) |>
+  select(year, month, close) |>
+  arrange(year, month)
+```
+
+## 3) Tidy `unemployment.csv`
+
+- wide → long; standardize keys (`year`, `month`) to match above
+
+```{r}
+unemp <- unemp_raw |>
+  rename(year = Year) |>
+  pivot_longer(-year, names_to = "month", values_to = "unemployment") |>
+  mutate(
+    month = str_to_lower(month),
+    month = recode(month,
+      jan="january", feb="february", mar="march",
+      apr="april",   may="may",      jun="june",
+      jul="july",    aug="august",   sep="september",
+      oct="october", nov="november", dec="december"
+    )
+  ) |>
+  arrange(year, month)
+```
+
+## 4) Join datasets
+
+```{r}
+pols_snp <- left_join(pols, snp,   by = c("year","month"))
+final_df <- left_join(pols_snp, unemp, by = c("year","month"))
+```
+
+## 5) Brief description (inline R)
+
+The **pols** data track monthly counts of national politicians by party and the sitting president; the **snp** data give monthly S&P closes; the **unemployment** data give monthly unemployment percentages.
+
+The merged dataset has **`r nrow(final_df)` rows** and **`r ncol(final_df)` columns**, covering **`r min(final_df$year, na.rm=TRUE)`–`r max(final_df$year, na.rm=TRUE)`**.  
+Key variables include `year`, `month`, `president`, party counts (`gov_*`, `sen_*`, `rep_*`), `close` (S&P), and `unemployment`.  
+Columns: `r paste(names(final_df), collapse = ", ")`.
+
+# Problem 2 — Mr./Professor/Gwynnda Trash Wheel
+
+```{r}
+trash_path <- "data/trash_wheel.xlsx"
+
+sheets <- readxl::excel_sheets(trash_path)
+get_sheet <- function(pattern) {
+  hit <- sheets[grepl(pattern, sheets, ignore.case = TRUE)]
+  if (length(hit) == 0) stop("Can't find sheet: ", pattern)
+  hit[1]
+}
+
+
+read_wheel <- function(sheet, wheel_label) {
+  df <- readxl::read_excel(trash_path, sheet = sheet, skip = 1) |>
+    janitor::clean_names()
+
+  if (!"dumpster" %in% names(df)) stop("No 'dumpster' column in ", sheet)
+  df <- dplyr::filter(df, !is.na(dumpster))
+
+  df <- df |>
+    dplyr::mutate(
+      month = dplyr::case_when(
+        is.numeric(month) & month >= 1 & month <= 12 ~ tolower(month.name[as.integer(month)]),
+        TRUE ~ tolower(as.character(month))
+      )
+    )
+
+  sb_col <- names(df)[grepl("sport", names(df), ignore.case = TRUE) &
+                      grepl("ball",  names(df), ignore.case = TRUE)]
+  if (length(sb_col) == 0) {
+    df <- dplyr::mutate(df, sports_balls = NA_integer_)
+  } else {
+    df <- dplyr::mutate(df, sports_balls = as.integer(round(.data[[sb_col[1]]])))
+  }
+
+  dplyr::mutate(df, wheel = wheel_label)
+}
+
+mr_sheet   <- get_sheet("mr")
+prof_sheet <- get_sheet("prof")
+gwyn_sheet <- get_sheet("gwynn|gwyn")  
+
+mr   <- read_wheel(mr_sheet,   "Mr.")       |> dplyr::mutate(year = as.integer(year))
+prof <- read_wheel(prof_sheet, "Professor") |> dplyr::mutate(year = as.integer(year))
+gwyn <- read_wheel(gwyn_sheet, "Gwynnda")   |> dplyr::mutate(year = as.integer(year))
+
+trash_all <- dplyr::bind_rows(mr, prof, gwyn)
+
+prof_total_weight <- trash_all |>
+  dplyr::filter(wheel == "Professor") |>
+  dplyr::summarise(total_weight_tons = sum(weight_tons, na.rm = TRUE)) |>
+  dplyr::pull(total_weight_tons)
+
+gwyn_jun_2022_cigs <- trash_all |>
+  dplyr::filter(wheel == "Gwynnda", year == 2022, month == "june") |>
+  dplyr::summarise(total_cigs = sum(cigarette_butts, na.rm = TRUE)) |>
+  dplyr::pull(total_cigs)
+```
+
+## Brief description (inline R)
+
+After cleaning and merging, the dataset has **`r nrow(trash_all)` rows** and **`r ncol(trash_all)` columns**.
+Key variables include `dumpster`, `month`, `year`, `weight_tons`, `volume_cubic_yards`,
+debris counts like `cigarette_butts`, `plastic_bags`, `sports_balls`, and the identifier `wheel`.
+
+For available data, **Professor Trash Wheel** collected **`r round(prof_total_weight, 1)` tons** of trash in total.  
+In **June 2022**, **Gwynnda** collected **`r format(gwyn_jun_2022_cigs, big.mark = ",")` cigarette butts**.
+
+# Problem 3 — Zillow ZORI in NYC (2015–2024)
+## Read & tidy, then merge with borough/neighborhood
+
+```{r}
+zori_path <- "data/zori_nyc.csv"
+map_path  <- "data/nyc_zip_neighborhoods.csv"
+
+zori_raw <- readr::read_csv(zori_path, guess_max = 200000) |> janitor::clean_names()
+map_raw  <- readr::read_csv(map_path)                       |> janitor::clean_names()
+
+zip_col_zori <- names(zori_raw)[
+  stringr::str_detect(
+    names(zori_raw),
+    stringr::regex("^zip$|regionname|region_name", ignore_case = TRUE)
+  )
+]
+stopifnot(length(zip_col_zori) >= 1)
+zori_raw <- zori_raw |>
+  dplyr::mutate(zip = stringr::str_pad(as.character(.data[[zip_col_zori[1]]]), width = 5, pad = "0"))
+
+nm <- names(zori_raw)
+month_cols <- nm[
+  stringr::str_detect(
+    nm,
+    stringr::regex("^x?20\\d{2}[_-]\\d{2}([_-]\\d{2})?$", ignore_case = TRUE)
+  ) |
+  stringr::str_detect(
+    nm,
+    stringr::regex("^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[-_\\s]?20\\d{2}$", ignore_case = TRUE)
+  )
+]
+stopifnot(length(month_cols) > 0)
+
+zori_long <- zori_raw |>
+  dplyr::select(zip, dplyr::all_of(month_cols)) |>
+  tidyr::pivot_longer(-zip, names_to = "period", values_to = "zori") |>
+  dplyr::mutate(
+    period = gsub("^x", "", period),
+    period = gsub("_", "-", period),
+    d1 = suppressWarnings(lubridate::ymd(period)),
+    d2 = suppressWarnings(lubridate::ymd(paste0(period, "-01"))),
+    d3 = suppressWarnings(lubridate::mdy(period)),
+    d4 = suppressWarnings(lubridate::mdy(paste0("1 ", period))),
+    date = dplyr::coalesce(d1, d2, d3, d4),
+    month_start = lubridate::floor_date(date, unit = "month")
+  ) |>
+  dplyr::select(zip, month_start, zori) |>
+  dplyr::filter(!is.na(month_start),
+                month_start >= as.Date("2015-01-01"),
+                month_start <= as.Date("2024-08-01"))
+
+zip_col_map <- names(map_raw)[
+  stringr::str_detect(names(map_raw),
+                      stringr::regex("^zip$|zipcode|zip_code", ignore_case = TRUE))
+]
+stopifnot(length(zip_col_map) >= 1)
+
+boro_col <- names(map_raw)[
+  stringr::str_detect(names(map_raw),
+                      stringr::regex("borough|boro|county", ignore_case = TRUE))
+]
+neigh_col <- names(map_raw)[
+  stringr::str_detect(names(map_raw),
+                      stringr::regex("neigh", ignore_case = TRUE))
+]
+stopifnot(length(boro_col)  >= 1)
+stopifnot(length(neigh_col) >= 1)
+
+map_clean <- map_raw |>
+  dplyr::mutate(
+    zip          = stringr::str_pad(as.character(.data[[zip_col_map[1]]]), 5, pad = "0"),
+    borough      = as.character(.data[[boro_col[1]]]),
+    neighborhood = as.character(.data[[neigh_col[1]]])
+  ) |>
+  dplyr::select(zip, borough, neighborhood) |>
+  dplyr::distinct()
+
+map_one_per_zip <- map_clean |>
+  dplyr::group_by(zip) |>
+  dplyr::summarise(
+    borough = dplyr::first(na.omit(borough)),
+    neighborhood = dplyr::first(na.omit(neighborhood)),
+    .groups = "drop"
+  )
+
+zori_nyc <- zori_long |>
+  dplyr::inner_join(map_clean, by = "zip") |>
+  dplyr::arrange(zip, month_start)
+
+p3_n_obs    <- nrow(zori_nyc)
+p3_n_zip    <- dplyr::n_distinct(zori_nyc$zip)
+p3_n_neigh  <- dplyr::n_distinct(zori_nyc$neighborhood)
+
+zips_only_in_map <- dplyr::anti_join(
+  dplyr::distinct(map_clean, zip),
+  dplyr::distinct(zori_long, zip),
+  by = "zip"
+) |> dplyr::arrange(zip)
+
+z2020 <- zori_nyc |>
+  dplyr::filter(month_start == as.Date("2020-01-01")) |>
+  dplyr::select(zip, zori_2020 = zori)
+
+z2021 <- zori_nyc |>
+  dplyr::filter(month_start == as.Date("2021-01-01")) |>
+  dplyr::select(zip, zori_2021 = zori)
+
+delta <- dplyr::inner_join(z2020, z2021, by = "zip") |>
+  dplyr::mutate(drop_2020_2021 = zori_2021 - zori_2020) |>
+  dplyr::left_join(map_one_per_zip, by = "zip") |>
+  dplyr::select(zip, borough, neighborhood, zori_2020, zori_2021, drop_2020_2021) |>
+  dplyr::arrange(drop_2020_2021) |>
+  dplyr::slice(1:10)
+```
